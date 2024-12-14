@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 from simple_knn._C import distCUDA2
 
-from .train_utils import update_learning_rate
+from .train_utils import update_learning_rate, ssim
 from gauss_util import ply, obj
 from gauss_rasterize.gauss_rasterize import GaussRasterizerSetting, GaussRasterizer
 
@@ -215,7 +215,6 @@ class GsDataset:
 
 
 class GsNetwork(torch.nn.Module):
-    # torch.nn.Module and super().__init__() just for checkpoint
     def __init__(self, device, point_number, percent_dense=0.01, max_sh_degree=3):
         super().__init__()
         self.percent_dense = percent_dense
@@ -510,12 +509,16 @@ class GsNetwork(torch.nn.Module):
 
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
+
+        # clone condition: > threshold max_grad = default:0.0002  &&  get_scaling < percent_dense*scene_extent
         densify_and_clone(
             grads, max_grad, extent, optimizer
-        )  # clone condition: > threshold  max_grad    = default:0.0002  &&  get_scaling < percent_dense*scene_extent
+        )
+
+        # split condition: > threshold  max_grad    = default:0.0002  &&  get_scaling > percent_dense*scene_extent
         densify_and_split(
             grads, max_grad, extent, optimizer
-        )  # split condition: > threshold  max_grad    = default:0.0002  &&  get_scaling > percent_dense*scene_extent
+        )
         prune_mask = (
             self.get_opacity < min_opacity
         ).squeeze()  # prune condition: < threshold  min_opacity = default:0.0050
@@ -612,70 +615,10 @@ class GsRender:
         return rendered_image, screenspace_points, radii
 
 
-def make(device, spatial_lr_scale=1.0, position_lr_max_steps=1000 * 10):
+def make(device, spatial_lr_scale=1.0, position_lr_max_steps= 1000 * 10):
     gsDataset = GsDataset(device=device, image_camera_path="./data/image/wizard/")
     gsNetwork = GsNetwork(device=device, point_number=1 * 10000)
     gsRender = GsRender()
-
-    def ssim(img1, img2, window_size=11, size_average=True):
-        def create_window(window_size, channel):
-            def gaussian(window_size, sigma):
-                gauss = torch.Tensor(
-                    [
-                        math.exp(-((x - window_size // 2) ** 2) / float(2 * sigma**2))
-                        for x in range(window_size)
-                    ]
-                )
-                return gauss / gauss.sum()
-
-            _1D_window = gaussian(window_size, 1.5).unsqueeze(1)
-            _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
-            window = torch.autograd.Variable(
-                _2D_window.expand(channel, 1, window_size, window_size).contiguous()
-            )
-            return window
-
-        def _ssim(img1, img2, window, window_size, channel, size_average=True):
-            mu1 = torch.nn.functional.conv2d(
-                img1, window, padding=window_size // 2, groups=channel
-            )
-            mu2 = torch.nn.functional.conv2d(
-                img2, window, padding=window_size // 2, groups=channel
-            )
-            mu1_sq = mu1.pow(2)
-            mu2_sq = mu2.pow(2)
-            mu1_mu2 = mu1 * mu2
-            sigma1_sq = (
-                torch.nn.functional.conv2d(
-                    img1 * img1, window, padding=window_size // 2, groups=channel
-                )
-                - mu1_sq
-            )
-            sigma2_sq = (
-                torch.nn.functional.conv2d(
-                    img2 * img2, window, padding=window_size // 2, groups=channel
-                )
-                - mu2_sq
-            )
-            sigma12 = (
-                torch.nn.functional.conv2d(
-                    img1 * img2, window, padding=window_size // 2, groups=channel
-                )
-                - mu1_mu2
-            )
-            C1 = 0.01**2
-            C2 = 0.03**2
-            ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / (
-                (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
-            )
-            return ssim_map.mean() if size_average else ssim_map.mean(1).mean(1).mean(1)
-
-        channel = img1.size(-3)
-        window = create_window(window_size, channel)
-        if img1.is_cuda:
-            window = window.cuda(img1.get_device())
-        window = window.type_as(img1)
-        return _ssim(img1, img2, window, window_size, channel, size_average)
 
     optimizer = torch.optim.Adam(
         [
@@ -705,47 +648,51 @@ def make(device, spatial_lr_scale=1.0, position_lr_max_steps=1000 * 10):
     densify_grad_threshold = 0.0002
     densify_opacity_threshold = 0.005
 
-    def regularizer(xyz, scaling, rotation, opacity):
-        # print('xyz', xyz.shape)            #[-1,3]
-        # print('scaling', scaling.shape)    #[-1,3]
-        # print('rotation', rotation.shape)  #[-1,4]
-        # print('opacity', opacity.shape)    #[-1,3]
-        regularization = (
-            (
-                torch.mean(scaling[:, 1] ** 2)
-                + torch.mean(scaling[:, 1] ** 2)
-                + torch.mean(scaling[:, 2] ** 2)
-            )
-            / 3.0
-        ) ** 0.5
-        return regularization
+    # def regularizer(xyz, scaling, rotation, opacity):
+    #     # print('xyz', xyz.shape)            #[-1,3]
+    #     # print('scaling', scaling.shape)    #[-1,3]
+    #     # print('rotation', rotation.shape)  #[-1,4]
+    #     # print('opacity', opacity.shape)    #[-1,3]
+    #     regularization = (
+    #         (
+    #             torch.mean(scaling[:, 1] ** 2)
+    #             + torch.mean(scaling[:, 1] ** 2)
+    #             + torch.mean(scaling[:, 2] ** 2)
+    #         )
+    #         / 3.0
+    #     ) ** 0.5
+    #     return regularization
 
     loss_weight_L1 = 0.8
     loss_weight_dssim = 0.2
-    loss_weight_regular = 0.1
+    # loss_weight_regular = 0.1
+
     white_background = 0
-    background = (
-        torch.tensor([[0, 0, 0], [1, 1, 1]][white_background]).float().to(device)
-    )
+    background = (torch.tensor([[0, 0, 0], [1, 1, 1]][white_background]).float().to(device))
     viewpoint_stack = gsDataset.image_camera.copy()
+
     for iteration in range(1, position_lr_max_steps + 1):
         if iteration % (position_lr_max_steps // 30) == 0:
             gsNetwork.oneupSHdegree()
 
         viewpoint_cam = viewpoint_stack[random.randint(0, len(viewpoint_stack) - 1)]
+        gt_image = viewpoint_cam.image_goal
+
         image, viewspace_point_tensor, radii = gsRender.render(
             viewpoint_cam, gsNetwork, background, device=device
         )
         visibility_filter = radii > 0
 
-        gt_image = viewpoint_cam.image_goal  # .to(device)
         L1 = torch.abs((image - gt_image)).mean()
         DSSIM = 1.0 - ssim(image, gt_image)
         # regularization = regularizer(gsNetwork._xyz, gsNetwork._scaling, gsNetwork._rotation, gsNetwork._opacity) * 0.1
-        # print('L1:', L1.item(),'','DSSIM:', DSSIM.item(), 'regularization:', regularization.item())
+
         loss = (
-            loss_weight_L1 * L1 + loss_weight_dssim * DSSIM
-        )  # + loss_weight_regular*regularization
+            loss_weight_L1 * L1
+            + loss_weight_dssim * DSSIM
+            # + loss_weight_regular * regularization
+        )
+
         if iteration == 1:
             torchviz.make_dot(image).render(
                 filename="network_image",
@@ -765,23 +712,29 @@ def make(device, spatial_lr_scale=1.0, position_lr_max_steps=1000 * 10):
             )
         loss.backward()
 
-        with torch.no_grad():  # use no_grad to disable automatic gradient-descent, and control it by self.
-            if (
-                iteration < densify_until_iter
-            ):  # xyz,clone/split/prune,opacity,...   #else just optimize parameters in render:  screenspace_points@render, opacity, scale, rotation, feature
+        # use no_grad to disable automatic gradient-descent, and control it by self.
+        with torch.no_grad():
+            # xyz,clone/split/prune,opacity,...
+            # else just optimize parameters in render: screenspace_points @ render, opacity, scale, rotation, feature
+            if (iteration < densify_until_iter):
+                # keep track of max radii in image-space for pruning
                 gsNetwork.max_radii2D[visibility_filter] = torch.max(
                     gsNetwork.max_radii2D[visibility_filter], radii[visibility_filter]
-                )  # keep track of max radii in image-space for pruning
+                )
+
+                # xyz_gradient_accum
                 gsNetwork.add_densification_stats(
                     viewspace_point_tensor, visibility_filter
-                )  # xyz_gradient_accum
+                )
+
                 if (
                     iteration > densify_from_iter
                     and iteration % densification_interval == 0
                 ):
+                    # 20
                     max_screen_size_threshold = (
                         16 if iteration > opacity_reset_interval else None
-                    )  # 20
+                    )
                     gsNetwork.densify_and_prune(
                         densify_grad_threshold,
                         densify_opacity_threshold,
@@ -793,9 +746,10 @@ def make(device, spatial_lr_scale=1.0, position_lr_max_steps=1000 * 10):
                     iteration % opacity_reset_interval == 0
                     or (white_background and iteration == densify_from_iter)
                 ):
+                    # opacity activation is sigmoid, so gradient_descent is inverse_sigmoid
                     gsNetwork.reset_opacity(
                         optimizer
-                    )  # opacity activation is sigmoid, so gradient_descent is inverse_sigmoid
+                    )
 
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
