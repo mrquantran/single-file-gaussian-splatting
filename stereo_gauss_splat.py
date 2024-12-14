@@ -156,9 +156,7 @@ class GsDataset:
                         image_norm[:, :, :3] * image_norm[:, :, 3:4] * 255,
                         dtype=np.byte,
                     )
-                    image_data = Image.fromarray(image_fore + image_back, "RGB").resize(
-                        resolution
-                    )
+                    image_data = Image.fromarray(image_fore + image_back, "RGB").resize(resolution)
 
                     # NeRF 'transform_matrix' is a camera-to-world transform
                     c2w = np.array(frame["transform_matrix"])
@@ -170,14 +168,9 @@ class GsDataset:
                     w2c = np.linalg.inv(c2w)
 
                     # R is stored transposed due to 'glm' in CUDA code
-                    R, t = (
-                        np.transpose(w2c[:3, :3]),
-                        w2c[:3, 3],
-                    )
+                    R, t = (np.transpose(w2c[:3, :3]), w2c[:3, 3])
 
-                    fovy = focal2fov(
-                        fov2focal(fovx, image_data.size[0]), image_data.size[1]
-                    )
+                    fovy = focal2fov(fov2focal(fovx, image_data.size[0]), image_data.size[1])
                     camera = Camera(
                         device=device,
                         uid=idx,
