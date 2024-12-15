@@ -30,11 +30,15 @@ class GsDataset:
             Rt[:3, 3] = t
             Rt[3, 3] = 1.0
 
+            # The camera-to-world matrix is computed as the inverse of the `Rt` matrix:
             C2W = np.linalg.inv(Rt)
+
+            # Adjust the Camera Center
             cam_center = C2W[:3, 3]
             cam_center = (cam_center + translate) * scale
             C2W[:3, 3] = cam_center
 
+            # Recompute World-to-Camera Matrix
             Rt = np.linalg.inv(C2W)
             return np.float32(Rt)
 
@@ -45,7 +49,18 @@ class GsDataset:
             transforms_file="transforms.json",
             white_background=False,
         ):
+            """
+            - The `load_image_camera_from_transforms` function reads images and corresponding camera data
+            from a `transforms.json` file, processes the data, and constructs a list of `Camera` objects.
+            - Each `Camera` object encapsulates image data, camera intrinsic and extrinsic parameters, and transformation matrices.
+            """
             class Camera:
+                """
+                The `Camera` class is central to this function, as it encapsulates:
+                    1. **Intrinsic Parameters:** Field of View (FoV), near and far plane distances.
+                    2. **Extrinsic Parameters:** Rotation (`R`), translation (`t`), and transformation matrices.
+                    3. **Projection Matrix:** Converts 3D points into the 2D image plane.
+                """
                 def __init__(
                     self,
                     device,
@@ -65,6 +80,9 @@ class GsDataset:
                     scale=1.0,
                 ):
                     def getProjectionMatrix(znear, zfar, fovX, fovY):
+                        """
+                        The projection matrix `P` maps 3D coordinates in camera space to 2D image coordinates, incorporating perspective distortion.
+                        """
                         tanHalfFovY = math.tan((fovY / 2))
                         tanHalfFovX = math.tan((fovX / 2))
 
@@ -189,7 +207,15 @@ class GsDataset:
             return image_camera
 
         def getNerfppNorm(cam_info):
+            """
+            This code defines a function `getNerfppNorm` that normalizes camera positions for consistent scaling in a 3D scene,
+            based on the **NeRF++ (Neural Radiance Fields++)** approach. It computes the scene's bounding sphere
+            by calculating the centroid of all camera positions and the radius that bounds them.
+            """
             def get_center_and_diag(cam_centers):
+                """
+                The diagonal of the bounding box is calculated as the maximum Euclidean distance from the bounding box center to any camera center.
+                """
                 cam_centers = np.hstack(cam_centers)
                 avg_cam_center = np.mean(cam_centers, axis=1, keepdims=True)
                 center = avg_cam_center
@@ -197,12 +223,16 @@ class GsDataset:
                 diagonal = np.max(dist)
                 return center.flatten(), diagonal
 
+            # The function iterates over the camera information (cam_info) to compute the centers of all cameras in world space.
+            # Camera centers are extracted from the Camera-to-World transformation matrix (C2W), specifically the translation component.
             cam_centers = []
             for cam in cam_info:
                 W2C = getWorld2View2(cam.R, cam.t)
                 C2W = np.linalg.inv(W2C)
                 cam_centers.append(C2W[:3, 3:4])
             center, diagonal = get_center_and_diag(cam_centers)
+
+            # The diagonal distance is scaled by a factor (e.g., 1.1) to slightly extend the extent for robustness.
             radius = diagonal * 1.1
             translate = -center
 
@@ -228,8 +258,8 @@ class GsNetwork(torch.nn.Module):
         self._xyz = nn.Parameter(points.requires_grad_(True))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
-        self._scaling = nn.Parameter(scale.requires_grad_(True))  #John
-        self._rotation = nn.Parameter(rotation.requires_grad_(True))  #John
+        self._scaling = nn.Parameter(scale.requires_grad_(True))
+        self._rotation = nn.Parameter(rotation.requires_grad_(True))
         self._opacity = nn.Parameter(opacity.requires_grad_(True))
 
         def build_covariance_from_scaling_rotation(scaling, scaling_modifier, rotation):
@@ -312,6 +342,7 @@ class GsNetwork(torch.nn.Module):
     def densify_and_prune(
         self, max_grad, min_opacity, extent, max_screen_size, optimizer
     ):
+        # Adds new Gaussians to the current set and updates the optimizer.
         def densification_postfix(
             new_xyz,
             new_features_dc,
@@ -321,6 +352,10 @@ class GsNetwork(torch.nn.Module):
             new_rotation,
             optimizer,
         ):
+            """
+            For each parameter (e.g., positions xyz, opacity, scaling), concatenate the new Gaussian values (extension_tensor) to the existing tensors.
+            Update the optimizer's internal state (exp_avg and exp_avg_sq) with zero-initialized values for the new Gaussians.
+            """
             def cat_tensors_to_optimizer(tensors_dict, optimizer):
                 optimizable_tensors = {}
                 for group in optimizer.param_groups:
@@ -367,7 +402,10 @@ class GsNetwork(torch.nn.Module):
                 "scaling": new_scaling,
                 "rotation": new_rotation,
             }
+            # Replace existing tensors (e.g., _xyz, _opacity) with the updated tensors that now include the new Gaussians.
             optimizable_tensors = cat_tensors_to_optimizer(d, optimizer)
+
+            # Reinitialize gradient accumulators (xyz_gradient_accum) and other related metrics (denom, max_radii2D) for the new set of Gaussians.
             self._xyz = optimizable_tensors["xyz"]
             self._features_dc = optimizable_tensors["f_dc"]
             self._features_rest = optimizable_tensors["f_rest"]
@@ -380,6 +418,7 @@ class GsNetwork(torch.nn.Module):
             self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
             self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
+        # Removes Gaussians that meet pruning criteria.
         def prune_points(mask, optimizer):
             def _prune_optimizer(mask, optimizer):
                 optimizable_tensors = {}
@@ -401,7 +440,10 @@ class GsNetwork(torch.nn.Module):
                         optimizable_tensors[group["name"]] = group["params"][0]
                 return optimizable_tensors
 
+            # Use a Boolean mask (valid_points_mask) to select the points to keep (~mask).
             valid_points_mask = ~mask
+
+            # Apply the mask to each parameter tensor (e.g., _xyz, _opacity, _scaling) and update the optimizer's tensors (exp_avg, exp_avg_sq) to reflect the reduced size.
             optimizable_tensors = _prune_optimizer(valid_points_mask, optimizer)
             self._xyz = optimizable_tensors["xyz"]
             self._features_dc = optimizable_tensors["f_dc"]
@@ -413,15 +455,23 @@ class GsNetwork(torch.nn.Module):
             self.denom = self.denom[valid_points_mask]
             self.max_radii2D = self.max_radii2D[valid_points_mask]
 
+        # Adds new Gaussians by cloning existing ones that meet a gradient-based threshold.
         def densify_and_clone(grads, grad_threshold, scene_extent, optimizer):
+            # Select Points to Clone:
+            # Identify points with gradients above grad_threshold (selected_pts_mask).
             selected_pts_mask = torch.where(
                 torch.norm(grads, dim=-1) >= grad_threshold, True, False
             )
+
+            # Ensure these points are within a reasonable scene extent (scene_extent).
             selected_pts_mask = torch.logical_and(
                 selected_pts_mask,
                 torch.max(self.get_scaling, dim=1).values
                 <= self.percent_dense * scene_extent,
-            )  # extract points that satisfy the gradient condition
+            )
+
+            # Extract positions (_xyz), features, opacity, scaling, and rotation for the selected points.
+            # Pass these as new Gaussians to densification_postfix.
             new_xyz = self._xyz[selected_pts_mask]
             new_features_dc = self._features_dc[selected_pts_mask]
             new_features_rest = self._features_rest[selected_pts_mask]
@@ -438,6 +488,7 @@ class GsNetwork(torch.nn.Module):
                 optimizer,
             )
 
+        # Adds new Gaussians by splitting existing ones that meet a different gradient-based threshold.
         def densify_and_split(grads, grad_threshold, scene_extent, optimizer, N=2):
             def build_rotation(r):
                 norm = torch.sqrt(
@@ -463,6 +514,9 @@ class GsNetwork(torch.nn.Module):
                 R[:, 2, 2] = 1 - 2 * (x * x + y * y)
                 return R
 
+            # Select Points to Split:
+            # Identify points with gradients above grad_threshold and
+            # scaling values that exceed a certain percentage of the scene extent (percent_dense).
             n_init_points = self.get_xyz.shape[0]
             padded_grad = torch.zeros((n_init_points), device=self.get_xyz.device)
             padded_grad[: grads.shape[0]] = grads.squeeze()
@@ -471,11 +525,17 @@ class GsNetwork(torch.nn.Module):
                 selected_pts_mask,
                 torch.max(self.get_scaling, dim=1).values
                 > self.percent_dense * scene_extent,
-            )  # extract points that satisfy the gradient condition
+            )
+
+            # Generate Split Points:
+            # Use the Gaussian scaling as the standard deviation (stds) to sample new positions around the original points.
+            # Apply random rotations to the sampled points (build_rotation).
             stds = self.get_scaling[selected_pts_mask].repeat(N, 1)
             means = torch.zeros((stds.size(0), 3), device=stds.device)
             samples = torch.normal(mean=means, std=stds)
             rots = build_rotation(self._rotation[selected_pts_mask]).repeat(N, 1, 1)
+
+            # Update Gaussian Properties: Compute scaling, rotation, opacity, and features for the split points.
             new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[
                 selected_pts_mask
             ].repeat(N, 1)
@@ -486,6 +546,8 @@ class GsNetwork(torch.nn.Module):
             new_features_dc = self._features_dc[selected_pts_mask].repeat(N, 1, 1)
             new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
             new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
+
+            # Add Split Gaussians: Pass the newly created Gaussians to densification_postfix.
             densification_postfix(
                 new_xyz,
                 new_features_dc,
@@ -495,6 +557,8 @@ class GsNetwork(torch.nn.Module):
                 new_rotation,
                 optimizer,
             )
+
+            # Prune Originals: Mark the original points for pruning after splitting.
             prune_filter = torch.cat(
                 (
                     selected_pts_mask,
@@ -507,27 +571,30 @@ class GsNetwork(torch.nn.Module):
             )
             prune_points(prune_filter, optimizer)
 
+        # Compute the average gradient for each Gaussian using accumulated statistics.
+        # Handle any invalid values by setting them to 0.
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
-        # clone condition: > threshold max_grad = default:0.0002  &&  get_scaling < percent_dense*scene_extent
-        densify_and_clone(
-            grads, max_grad, extent, optimizer
-        )
+        # Clone Gaussians with gradients above max_grad and scaling below a threshold (percent_dense * scene_extent).
+        densify_and_clone(grads, max_grad, extent, optimizer)
 
-        # split condition: > threshold  max_grad    = default:0.0002  &&  get_scaling > percent_dense*scene_extent
-        densify_and_split(
-            grads, max_grad, extent, optimizer
-        )
-        prune_mask = (
-            self.get_opacity < min_opacity
-        ).squeeze()  # prune condition: < threshold  min_opacity = default:0.0050
+        # Split Gaussians with gradients above max_grad and scaling above a threshold (percent_dense * scene_extent).
+        densify_and_split(grads, max_grad, extent, optimizer)
+
+        # Pruning Conditions:
+        # - Low Opacity: Remove Gaussians with opacity below min_opacity.
+        # - Large Screen-Space Radius: Remove Gaussians with radii exceeding max_screen_size.
+        # - Large Scaling in World Space: Remove Gaussians with scaling exceeding 10% of the scene extent.
+        prune_mask = (self.get_opacity < min_opacity).squeeze()
+
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(
                 torch.logical_or(prune_mask, big_points_vs), big_points_ws
             )
+
         prune_points(prune_mask, optimizer)
         torch.cuda.empty_cache()
 
@@ -616,8 +683,15 @@ class GsRender:
 
 
 def make(device, spatial_lr_scale=1.0, position_lr_max_steps= 1000 * 10):
+    # Loads images and corresponding camera parameters from the given path.
     gsDataset = GsDataset(device=device, image_camera_path="./data/image/wizard/")
-    gsNetwork = GsNetwork(device=device, point_number=1 * 10000)
+
+    # Initialize the parametrs of Gaussian 3D
+    # Point_number will get from Colmap
+    # https://github.com/graphdeco-inria/gaussian-splatting/blob/main/scene/__init__.py#L44
+    gsNetwork = GsNetwork(device=device, point_number= 1 * 10000)
+
+    # A custom renderer to project 3D Gaussian splats into 2D images using CUDA acceleration.
     gsRender = GsRender()
 
     optimizer = torch.optim.Adam(
@@ -641,6 +715,8 @@ def make(device, spatial_lr_scale=1.0, position_lr_max_steps= 1000 * 10):
         eps=1e-15,
     )
 
+    # Densification: Adjusts the number of 3D Gaussian based on the gradient of the rendered image
+    # Opacity Reset: Periodically resets opacity
     densification_interval = position_lr_max_steps // 300
     opacity_reset_interval = position_lr_max_steps // 10
     densify_from_iter = position_lr_max_steps // 6
@@ -648,28 +724,13 @@ def make(device, spatial_lr_scale=1.0, position_lr_max_steps= 1000 * 10):
     densify_grad_threshold = 0.0002
     densify_opacity_threshold = 0.005
 
-    # def regularizer(xyz, scaling, rotation, opacity):
-    #     # print('xyz', xyz.shape)            #[-1,3]
-    #     # print('scaling', scaling.shape)    #[-1,3]
-    #     # print('rotation', rotation.shape)  #[-1,4]
-    #     # print('opacity', opacity.shape)    #[-1,3]
-    #     regularization = (
-    #         (
-    #             torch.mean(scaling[:, 1] ** 2)
-    #             + torch.mean(scaling[:, 1] ** 2)
-    #             + torch.mean(scaling[:, 2] ** 2)
-    #         )
-    #         / 3.0
-    #     ) ** 0.5
-    #     return regularization
-
     loss_weight_L1 = 0.8
     loss_weight_dssim = 0.2
-    # loss_weight_regular = 0.1
 
     white_background = 0
     background = (torch.tensor([[0, 0, 0], [1, 1, 1]][white_background]).float().to(device))
-    viewpoint_stack = gsDataset.image_camera.copy()
+
+    viewpoint_stack: list = gsDataset.image_camera.copy() # get 2D image list from dataset
 
     for iteration in range(1, position_lr_max_steps + 1):
         if iteration % (position_lr_max_steps // 30) == 0:
@@ -681,16 +742,17 @@ def make(device, spatial_lr_scale=1.0, position_lr_max_steps= 1000 * 10):
         image, viewspace_point_tensor, radii = gsRender.render(
             viewpoint_cam, gsNetwork, background, device=device
         )
+
+        # Radii: represents the computed radius of each Gaussian point in screen space.
+        # Identifies which Gaussians have a positive radius and are thus visible
         visibility_filter = radii > 0
 
         L1 = torch.abs((image - gt_image)).mean()
         DSSIM = 1.0 - ssim(image, gt_image)
-        # regularization = regularizer(gsNetwork._xyz, gsNetwork._scaling, gsNetwork._rotation, gsNetwork._opacity) * 0.1
 
         loss = (
             loss_weight_L1 * L1
             + loss_weight_dssim * DSSIM
-            # + loss_weight_regular * regularization
         )
 
         if iteration == 1:
@@ -712,26 +774,26 @@ def make(device, spatial_lr_scale=1.0, position_lr_max_steps= 1000 * 10):
             )
         loss.backward()
 
-        # use no_grad to disable automatic gradient-descent, and control it by self.
         with torch.no_grad():
+            # use no_grad to disable automatic gradient-descent, and control it by self.
             # xyz,clone/split/prune,opacity,...
             # else just optimize parameters in render: screenspace_points @ render, opacity, scale, rotation, feature
             if (iteration < densify_until_iter):
-                # keep track of max radii in image-space for pruning
+                # Identify significant Gaussians (large radii) and those that can potentially be pruned (small radii).
                 gsNetwork.max_radii2D[visibility_filter] = torch.max(
                     gsNetwork.max_radii2D[visibility_filter], radii[visibility_filter]
                 )
 
-                # xyz_gradient_accum
+                # Accumulates gradient-related statistics for visible Gaussians.
+                # used to decide where to add new Gaussians during densification.
                 gsNetwork.add_densification_stats(
                     viewspace_point_tensor, visibility_filter
                 )
 
-                if (
-                    iteration > densify_from_iter
-                    and iteration % densification_interval == 0
-                ):
-                    # 20
+                # After a certain number of iterations (densify_from_iter).
+                # At regular intervals defined by densification_interval.
+                if (iteration > densify_from_iter and iteration % densification_interval == 0):
+                    # Limits the maximum allowable size of Gaussians for pruning decisions.
                     max_screen_size_threshold = (
                         16 if iteration > opacity_reset_interval else None
                     )
@@ -742,6 +804,8 @@ def make(device, spatial_lr_scale=1.0, position_lr_max_steps= 1000 * 10):
                         max_screen_size_threshold,
                         optimizer,
                     )
+
+                # Reinitializes opacity values to a better range, allowing gradients to flow smoothly again.
                 if iteration > 0 and (
                     iteration % opacity_reset_interval == 0
                     or (white_background and iteration == densify_from_iter)

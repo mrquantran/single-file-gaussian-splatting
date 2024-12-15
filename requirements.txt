@@ -4,3 +4,6 @@ PyMCubes
 trimesh
 plyfile
 scikit-learn
+numpy
+scipy
+open3d
