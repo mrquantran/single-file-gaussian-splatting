@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 from simple_knn._C import distCUDA2
 
-from .train_utils import update_learning_rate, ssim
+from train_utils import update_learning_rate, ssim
 from gauss_util import ply, obj
 from gauss_rasterize.gauss_rasterize import GaussRasterizerSetting, GaussRasterizer
 
@@ -757,7 +757,7 @@ def make(device, spatial_lr_scale=1.0, position_lr_max_steps= 1000 * 10):
         update_learning_rate(
             optimizer=optimizer,
             iteration=iteration,
-            max_steps=position_lr_max_steps,
+            position_lr_max_steps=position_lr_max_steps,
             spatial_lr_scale=spatial_lr_scale,
         )
 

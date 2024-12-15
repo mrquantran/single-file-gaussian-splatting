@@ -1,0 +1,6 @@
+pymeshlab==2022.2
+xatlas
+PyMCubes
+trimesh
+plyfile
+scikit-learn

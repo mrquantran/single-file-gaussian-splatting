@@ -75,11 +75,11 @@ class Mesh:
                 T = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 1]], device=mesh.device, dtype=torch.float32)
             # rotation (how many 90 degrees)
             if '1' in front_dir:
-                T @= torch.tensor([[0, -1, 0], [1, 0, 0], [0, 0, 1]], device=mesh.device, dtype=torch.float32) 
+                T @= torch.tensor([[0, -1, 0], [1, 0, 0], [0, 0, 1]], device=mesh.device, dtype=torch.float32)
             elif '2' in front_dir:
-                T @= torch.tensor([[1, 0, 0], [0, -1, 0], [0, 0, 1]], device=mesh.device, dtype=torch.float32) 
+                T @= torch.tensor([[1, 0, 0], [0, -1, 0], [0, 0, 1]], device=mesh.device, dtype=torch.float32)
             elif '3' in front_dir:
-                T @= torch.tensor([[0, 1, 0], [-1, 0, 0], [0, 0, 1]], device=mesh.device, dtype=torch.float32) 
+                T @= torch.tensor([[0, 1, 0], [-1, 0, 0], [0, 0, 1]], device=mesh.device, dtype=torch.float32)
             mesh.v @= T
             mesh.vn @= T
 
@@ -195,7 +195,7 @@ class Mesh:
                 if os.path.exists(candidate):
                     mtl_path = candidate
                     break
-            
+
             # if albedo_path is not provided, try retrieve it from mtl
             if mtl_path is not None and albedo_path is None:
                 with open(mtl_path, "r") as f:
@@ -211,7 +211,7 @@ class Mesh:
                         albedo_path = os.path.join(os.path.dirname(path), split_line[1])
                         print(f"[load_obj] use texture from: {albedo_path}")
                         break
-            
+
             # still not found albedo_path, or the path doesn't exist
             if albedo_path is None or not os.path.exists(albedo_path):
                 # init an empty texture
@@ -256,7 +256,7 @@ class Mesh:
                 _mesh = trimesh.util.concatenate(_concat)
         else:
             _mesh = _data
-        
+
         if _mesh.visual.kind == 'vertex':
             vertex_colors = _mesh.visual.vertex_colors
             vertex_colors = np.array(vertex_colors[..., :3]).astype(np.float32) / 255
@@ -376,7 +376,7 @@ class Mesh:
             # save to cache
             if cache_path is not None:
                 np.savez(cache_path, vt=vt_np, ft=ft_np, vmapping=vmapping)
-        
+
         vt = torch.from_numpy(vt_np.astype(np.float32)).to(self.device)
         ft = torch.from_numpy(ft_np.astype(np.int32)).to(self.device)
         self.vt = vt
@@ -386,7 +386,7 @@ class Mesh:
             # remap v/f to vt/ft, so each v correspond to a unique vt. (necessary for gltf)
             vmapping = torch.from_numpy(vmapping.astype(np.int64)).long().to(self.device)
             self.align_v_to_vt(vmapping)
-    
+
     def align_v_to_vt(self, vmapping=None):
         # remap v/f and vn/vn to vt/ft.
         if vmapping is None:
@@ -409,7 +409,7 @@ class Mesh:
             if tensor is not None:
                 setattr(self, name, tensor.to(device))
         return self
-    
+
     def write(self, path):
         if path.endswith(".ply"):
             self.write_ply(path)
@@ -419,7 +419,7 @@ class Mesh:
             self.write_glb(path)
         else:
             raise NotImplementedError(f"format {path} not supported!")
-    
+
     # write to ply file (only geom)
     def write_ply(self, path):
 
@@ -465,7 +465,7 @@ class Mesh:
                 pygltflib.Primitive(
                     # indices to accessors (0 is triangles)
                     attributes=pygltflib.Attributes(
-                        POSITION=1, TEXCOORD_0=2, 
+                        POSITION=1, TEXCOORD_0=2,
                     ),
                     indices=0, material=0,
                 )
@@ -715,7 +715,7 @@ def mipmap_linear_grid_put_2d(H, W, coords, values, min_resolution=32, return_co
             def stride_from_shape(shape):
                 stride = [1]
                 for x in reversed(shape[1:]):
-                    stride.append(stride[-1] * x) 
+                    stride.append(stride[-1] * x)
                 return list(reversed(stride))
             # input: [..., C], D dimension + C channel
             # count: [..., 1], D dimension
@@ -735,7 +735,7 @@ def mipmap_linear_grid_put_2d(H, W, coords, values, min_resolution=32, return_co
             flatten_indices = (indices * torch.tensor(stride, dtype=torch.long, device=indices.device)).sum(-1)  # [N]
 
             if weights is None:
-                weights = torch.ones_like(values[..., :1]) 
+                weights = torch.ones_like(values[..., :1])
 
             input.scatter_add_(0, flatten_indices.unsqueeze(1).repeat(1, C), values)
             count.scatter_add_(0, flatten_indices.unsqueeze(1), weights)
@@ -773,7 +773,7 @@ def mipmap_linear_grid_put_2d(H, W, coords, values, min_resolution=32, return_co
         result = torch.zeros(H, W, C, device=values.device, dtype=values.dtype)  # [H, W, C]
         count = torch.zeros(H, W, 1, device=values.device, dtype=values.dtype)  # [H, W, 1]
         weights = torch.ones_like(values[..., :1])  # [N, 1]
-        
+
         result, count = scatter_add_nd_with_count(result, count, indices_00, values * w_00.unsqueeze(1), weights* w_00.unsqueeze(1))
         result, count = scatter_add_nd_with_count(result, count, indices_01, values * w_01.unsqueeze(1), weights* w_01.unsqueeze(1))
         result, count = scatter_add_nd_with_count(result, count, indices_10, values * w_10.unsqueeze(1), weights* w_10.unsqueeze(1))
@@ -796,7 +796,7 @@ def mipmap_linear_grid_put_2d(H, W, coords, values, min_resolution=32, return_co
     count = torch.zeros(H, W, 1, device=values.device, dtype=values.dtype)  # [H, W, 1]
 
     cur_H, cur_W = H, W
-    
+
     while min(cur_H, cur_W) > min_resolution:
 
         # try to fill the holes
@@ -809,7 +809,7 @@ def mipmap_linear_grid_put_2d(H, W, coords, values, min_resolution=32, return_co
         count[mask] = count[mask] + torch.nn.functional.interpolate(cur_count.view(1, 1, cur_H, cur_W), (H, W), mode='bilinear', align_corners=False).view(H, W, 1)[mask]
         cur_H //= 2
         cur_W //= 2
-    
+
     if return_count:
         return result, count
 
@@ -870,9 +870,9 @@ def save_mesh(gsNetwork, gsRender, opacity_threshold,density_threshold,  resolut
                 power = -0.5 * (x**2 * inv_a + y**2 * inv_d + z**2 * inv_f) - x * y * inv_b - x * z * inv_c - y * z * inv_e
 
                 power[power > 0] = -1e10 # abnormal values... make weights 0
-                    
+
                 return torch.exp(power)
-            
+
             block_size = 2 / num_blocks
 
             assert resolution % block_size == 0
@@ -887,7 +887,7 @@ def save_mesh(gsNetwork, gsRender, opacity_threshold,density_threshold,  resolut
             xyzs = gsNetwork.get_xyz[mask]
             dirs = gsNetwork._rotation[mask]
             stds = gsNetwork.get_scaling[mask]
-            
+
             if 1:
                 # normalize to ~ [-1, 1]
                 mn, mx = xyzs.amin(0), xyzs.amax(0)
@@ -905,7 +905,7 @@ def save_mesh(gsNetwork, gsRender, opacity_threshold,density_threshold,  resolut
             X = torch.linspace(-1, 1, resolution).split(split_size)
             Y = torch.linspace(-1, 1, resolution).split(split_size)
             Z = torch.linspace(-1, 1, resolution).split(split_size)
-            
+
             for xi, xs in enumerate(X):  #loop blocks (assume max size of gaussian is small than relax_ratio * block_size !!!)
                 for yi, ys in enumerate(Y):
                     for zi, zs in enumerate(Z):
@@ -935,13 +935,13 @@ def save_mesh(gsNetwork, gsRender, opacity_threshold,density_threshold,  resolut
                             end = min(start + batch_g, g_covs.shape[1])
                             w = gaussian_3d_coeff(g_pts[:, start:end].reshape(-1, 3), g_covs[:, start:end].reshape(-1, 6)).reshape(pts.shape[0], -1) # [M, l]
                             val += (mask_opas[:, start:end] * w).sum(-1)
-                        
+
                         # kiui.lo(val, mask_opas, w)
-                    
-                        occ[xi * split_size: xi * split_size + len(xs), 
-                            yi * split_size: yi * split_size + len(ys), 
-                            zi * split_size: zi * split_size + len(zs)] = val.reshape(len(xs), len(ys), len(zs)) 
-            
+
+                        occ[xi * split_size: xi * split_size + len(xs),
+                            yi * split_size: yi * split_size + len(ys),
+                            zi * split_size: zi * split_size + len(zs)] = val.reshape(len(xs), len(ys), len(zs))
+
             #kiui.lo(occ, verbose=1)
             return occ, center, scale
 
@@ -963,7 +963,7 @@ def save_mesh(gsNetwork, gsRender, opacity_threshold,density_threshold,  resolut
             if v_pct > 0:
                 ms.meshing_merge_close_vertices(
                     threshold=pml.Percentage(v_pct)
-                )  # 1/10000 of bounding box diagonal
+                )  # convert to pymeshlab Percentage object
 
             ms.meshing_remove_duplicate_faces()  # faces defined by the same verts
             ms.meshing_remove_null_faces()  # faces with area == 0
@@ -1140,7 +1140,7 @@ def save_mesh(gsNetwork, gsRender, opacity_threshold,density_threshold,  resolut
         pose = orbit_camera(ver, hor, cam.radius)
 
         cur_cam = MiniCam(pose, render_resolution, render_resolution, cam.fovy, cam.fovx, cam.near, cam.far)
-        
+
         image, viewspace_point_tensor, radii = gsRender.render(cur_cam, gsNetwork, background, device='cuda')
 
         rgbs = image.unsqueeze(0) # [1, 3, H, W] in [0, 1]
@@ -1150,7 +1150,7 @@ def save_mesh(gsNetwork, gsRender, opacity_threshold,density_threshold,  resolut
         #     rgbs = self.guidance.refine(rgbs, [ver], [hor], [0])
             # import kiui
             # kiui.vis.plot_image(rgbs)
-            
+
         # get coordinate in texture image
         pose = torch.from_numpy(pose.astype(np.float32)).to('cuda')
         proj = torch.from_numpy(cam.perspective.astype(np.float32)).to('cuda')
@@ -1179,7 +1179,7 @@ def save_mesh(gsNetwork, gsRender, opacity_threshold,density_threshold,  resolut
 
         uvs = uvs.view(-1, 2).clamp(0, 1)[mask]
         rgbs = rgbs.view(3, -1).permute(1, 0)[mask].contiguous()
-        
+
         # update texture image
         cur_albedo, cur_cnt = mipmap_linear_grid_put_2d(
             h, w,
@@ -1188,7 +1188,7 @@ def save_mesh(gsNetwork, gsRender, opacity_threshold,density_threshold,  resolut
             min_resolution=256,
             return_count=True,
         )
-        
+
         # albedo += cur_albedo
         # cnt += cur_cnt
         mask = cnt.squeeze(-1) < 0.1

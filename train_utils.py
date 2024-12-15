@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import math
 
 def update_learning_rate(optimizer, iteration, position_lr_max_steps = 1000 * 10, spatial_lr_scale = 1.0) -> float:
     """
